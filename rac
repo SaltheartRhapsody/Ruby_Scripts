@@ -1,0 +1,72 @@
+#!/usr/bin/env ruby
+require File.expand_path(File.join(File.dirname(__FILE__), 'remote.rb'))
+require 'parallel'
+
+options = <<EOF
+[tight]
+==================================================================================================
+Options:
+
+ --status		check the power status
+ --off		power down 
+ --on		power up
+ --reboot		reboot
+ --reset		hard reset
+ --all		execute command on every cluster machine
+ --machines <machines:s>...		execute command on a list of machines. ex: --machines a23 b13 a01
+
+--------------------------------------------------------------------------------------------------
+Overview:
+
+This script was built to remotely control the cluster through the use of the RAC
+modules installed in each machine.  It uses a custom method found in 'remote.rb'
+which uses functionality from the net::ssh ruby gem to ssh into each specified
+RAC module and execute one of a number of commands as the prompted user.
+=================================================================================================
+EOF
+
+# parse command line
+args = Getopt::Declare.new(options)
+
+# flesh out host list
+if args['--all']
+	Hosts = File.readlines(File.expand_path(File.join(File.dirname(__FILE__), 'lib/cluster')))
+	Hosts.collect! do |x| 
+		x.to_s.chomp!			#remove \n
+		x.insert(0, 'rac-')		#add rac, format is rac-twins-a01
+	end
+else
+	Hosts = args['--machines']
+	Hosts.collect! do |x|
+		x.insert(0, 'rac-twins-')	#add rac-twins, format is rac-twins-a01
+	end
+end
+
+# flesh out command
+command = 'racadm serveraction powerstatus' if args['--status']
+command = 'racadm serveraction powerdown' if args['--off']
+command = 'racadm serveraction powerup' if args['--on']
+command = 'racadm serveraction powercycle' if args['--reboot']
+command = 'racadm serveraction hardreset' if args['--reset']
+
+# grab username and password info
+begin 
+	print 'Username: '
+	Un = gets.chomp!
+	print 'Password: '
+
+	# prevent password from echoing to console
+	system('stty -echo')
+	Pw = gets.chomp!
+	puts
+	system('stty echo')
+rescue NoMethodError, Interrupt
+	# if the process is interrupted (ctrl-c), we display the characters again and exit
+	system('stty echo')
+	exit
+end
+
+# execute command on each host in the host list.  Parallelized for efficiency
+Parallel.each(Hosts, :in_threads => 16) do |host|
+	Remote.distribute(host, command, Un, Pw)
+end
